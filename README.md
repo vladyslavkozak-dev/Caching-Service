@@ -59,11 +59,20 @@ Caching happens on two levels, both in PostgreSQL:
 4. Store the new transformations and the payload, then return the new id.
 
 So a payload that shares some strings with earlier ones only pays for the new strings, and a
-repeated payload costs two indexed lookups.
+repeated payload costs a single indexed lookup.
 
-Both inserts use `ON CONFLICT DO NOTHING`. When two identical requests race, the database
-keeps one payload and both requests get its id (covered by
-`test_concurrent_identical_requests_share_payload`).
+### Transactions and concurrency
+
+- The read transaction is committed before the transformer is called, so a request waiting
+  on the slow service doesn't hold a pooled connection. Without that, 16 concurrent uncached
+  requests exhausted the default pool (5 + 10 overflow) and one failed with a pool timeout
+  (`test_transaction_is_closed_while_transforming`).
+- Both inserts use `ON CONFLICT DO NOTHING`. When two identical requests race, the database
+  keeps one payload and both requests get its id
+  (`test_concurrent_identical_requests_share_payload`).
+- New strings are inserted in sorted order. Concurrent requests with overlapping strings then
+  take row locks in the same order, which rules out deadlocks
+  (`test_concurrent_overlapping_payloads_do_not_deadlock`).
 
 Known limitation: two *concurrent* requests that share a string that isn't cached yet will
 both call the transformer for it. The results are identical and only one is stored. Avoiding
@@ -88,7 +97,8 @@ complexity here.
 | `422`  | invalid input | FastAPI validation error |
 
 Input rules: both lists are required, non-empty, and of the same length. Each item is a string
-of at most 500 characters (see [Decisions](#decisions-and-shortcuts)).
+of at most 500 characters (see [Decisions](#decisions-and-shortcuts)) without NUL characters,
+which Postgres text columns can't store.
 
 ```bash
 curl -s -X POST localhost:8000/payload -H 'Content-Type: application/json' \
@@ -247,6 +257,20 @@ src/cache_cli/
   transformer call doesn't block the event loop. It also keeps the code simpler than async.
 - **Single-layer Docker build.** Dependencies and code are installed in one `pip install .`
   step, so code changes reinstall dependencies. That's fine at this size.
+
+## Known limitations
+
+- **Transformation happens inside the `POST` request.** A payload with many new strings takes
+  `TRANSFORM_DELAY` seconds per string before it responds, and `cache-cli` gives up after 60
+  seconds. The server still finishes and caches the result, so a retry is fast. A production
+  version would hand the work to a queue and let the client poll.
+- **Concurrent requests may transform the same new string twice**, see
+  [Transactions and concurrency](#transactions-and-concurrency).
+- **Lone surrogates such as `"\ud800"` get a `500` instead of a `422`.** Pydantic rejects
+  them, but FastAPI's default validation error response echoes the input back and fails to
+  encode it as UTF-8. Fixing it means replacing the default error handler.
+- **One worker.** `create_all` on startup isn't safe to run from several workers at once.
+  With migrations run as a separate step, `uvicorn --workers N` would work.
 - **No authentication or rate limiting.**
 
 ## Open questions about the spec

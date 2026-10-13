@@ -21,6 +21,11 @@ services:
       TRANSFORM_DELAY: ${TRANSFORM_DELAY:-0.5}
     ports:
       - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/openapi.json')"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
     depends_on:
       db:
         condition: service_healthy

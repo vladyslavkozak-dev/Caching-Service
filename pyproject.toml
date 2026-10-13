@@ -6,6 +6,7 @@ build-backend = "hatchling.build"
 name = "payload-cache"
 version = "0.1.0"
 description = "Payload generation service with cached string transformations"
+readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "fastapi>=0.115",

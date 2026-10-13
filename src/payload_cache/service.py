@@ -31,7 +31,10 @@ def interleave(first: Sequence[str], second: Sequence[str]) -> list[str]:
 def get_transformed(
     session: Session, values: Iterable[str], transform: Transformer
 ) -> dict[str, str]:
-    """Map each value to its transformation, calling `transform` only for uncached values."""
+    """Map each value to its transformation, calling `transform` only for uncached values.
+
+    Ends the current transaction before calling `transform`.
+    """
     unique = set(values)
     rows = session.execute(
         select(TransformedString.source, TransformedString.result).where(
@@ -44,11 +47,16 @@ def get_transformed(
     if not missing:
         return cached
 
+    # Return the connection to the pool while waiting on the slow transformer, otherwise
+    # a burst of uncached requests exhausts the pool.
+    session.commit()
     fresh = {value: transform(value) for value in missing}
-    # A concurrent request may cache the same strings first, its results are identical.
+
+    # Rows go in sorted order so concurrent inserts lock them in the same order and can't
+    # deadlock. A concurrent request may cache the same strings first, its results are identical.
     session.execute(
         insert(TransformedString)
-        .values([{"source": source, "result": result} for source, result in fresh.items()])
+        .values([{"source": source, "result": result} for source, result in sorted(fresh.items())])
         .on_conflict_do_nothing()
     )
     return cached | fresh

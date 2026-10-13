@@ -1,3 +1,4 @@
+import random
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -73,3 +74,33 @@ def test_concurrent_identical_requests_share_payload(engine, clean_db):
     created = [flag for _, flag in results]
     assert len(ids) == 1
     assert sorted(created) == [False, True]
+
+
+def test_transaction_is_closed_while_transforming(session):
+    in_transaction = []
+
+    def transform(value: str) -> str:
+        in_transaction.append(session.in_transaction())
+        return value.upper()
+
+    create_payload(session, ["a"], ["b"], transform)
+
+    assert in_transaction == [False, False]
+
+
+def test_concurrent_overlapping_payloads_do_not_deadlock(engine, clean_db):
+    # Rows inserted in a different order by two transactions used to deadlock.
+    vocabulary = [f"word {i}" for i in range(300)]
+    start = threading.Barrier(8, timeout=5)
+
+    def worker(seed: int) -> None:
+        rng = random.Random(seed)
+        start.wait()
+        for _ in range(10):
+            size = rng.choice([10, 40, 120])
+            words = rng.sample(vocabulary, size * 2)
+            with Session(engine) as session:
+                create_payload(session, words[:size], words[size:], str.upper)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(worker, range(8)))

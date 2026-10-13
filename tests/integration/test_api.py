@@ -52,6 +52,16 @@ def test_invalid_payload_is_rejected_before_transforming(client, transformer):
     assert transformer.calls == []
 
 
+def test_nul_character_is_rejected(client):
+    response = client.post(
+        "/payload",
+        content=r'{"list_1": ["a\u0000b"], "list_2": ["c"]}',
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert response.status_code == 422
+
+
 def test_read_unknown_payload(client):
     assert client.get(f"/payload/{uuid.uuid4()}").status_code == 404
 

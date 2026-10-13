@@ -1,11 +1,19 @@
 import uuid
 from typing import Annotated
 
-from pydantic import BaseModel, Field, StringConstraints, model_validator
+from pydantic import AfterValidator, BaseModel, Field, StringConstraints, model_validator
+
+
+def _without_nul(value: str) -> str:
+    # JSON allows "\u0000", but Postgres text columns can't store it.
+    if "\x00" in value:
+        raise ValueError("must not contain NUL characters")
+    return value
+
 
 # Each string becomes a primary key in the cache table, and a Postgres btree index entry
 # can't exceed ~2.7 KB. 500 characters stays under that even for 4-byte UTF-8.
-CachedString = Annotated[str, StringConstraints(max_length=500)]
+CachedString = Annotated[str, StringConstraints(max_length=500), AfterValidator(_without_nul)]
 
 
 class PayloadIn(BaseModel):
